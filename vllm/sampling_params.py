@@ -641,6 +641,8 @@ class SamplingParams(
         if self.trace_decode_token_ids is not None:
             if not self.trace_decode_token_ids:
                 raise ValueError("trace_decode_token_ids must be a non-empty list.")
+            if self.n != 1:
+                raise ValueError("trace_decode_token_ids requires n=1.")
             if not all(
                 isinstance(t, int) and t >= 0 for t in self.trace_decode_token_ids
             ):
@@ -957,6 +959,10 @@ class SamplingParams(
             raise ValueError(
                 "Output logprobs are not supported with DSpark confidence-based "
                 "verification."
+
+        if self.trace_decode_token_ids is not None:
+            raise ValueError(
+                "trace_decode_token_ids is not supported with speculative decoding."
             )
 
         # Some sampling parameters are not yet compatible with spec decoding.
