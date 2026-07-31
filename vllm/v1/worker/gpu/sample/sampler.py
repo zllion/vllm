@@ -42,6 +42,7 @@ class Sampler:
         use_fp64_gumbel: bool = False,
         reasoning_config: ReasoningConfig | None = None,
         return_sampling_mask: bool = False,
+        max_model_len: int = 8192,
     ):
         self.logprobs_mode = logprobs_mode
         self.compute_nans = envs.VLLM_COMPUTE_NANS_IN_LOGITS  # False by default.
@@ -54,7 +55,7 @@ class Sampler:
         self.bad_words_state = BadWordsState(req_states)
         self.logprob_token_ids_state = LogprobTokenIdsState(max_num_reqs, device)
         self.thinking_budget_state = ThinkingBudgetState(req_states, reasoning_config)
-        self.trace_replay_state = TraceReplayState(max_num_reqs, device)
+        self.trace_replay_state = TraceReplayState(max_num_reqs, max_model_len, device)
         self.num_speculative_tokens = num_speculative_tokens
         self.return_sampling_mask = return_sampling_mask
         self.use_flashinfer = (
