@@ -984,6 +984,7 @@ class SamplingParams(
             raise ValueError(
                 "Output logprobs are not supported with DSpark confidence-based "
                 "verification."
+            )
 
         # Some sampling parameters are not yet compatible with spec decoding.
         if self.min_p > _SAMPLING_EPS or self.logit_bias:
