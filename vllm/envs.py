@@ -1748,6 +1748,8 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Custom routing strategies can be registered by
     # RoutingSimulator.register_strategy()
     # Note: custom strategies may not produce correct model outputs
+    # Note: the built-in strategies sample distinct expert ids per token, as
+    # required by the `deepep_v2` all2all backend.
     "VLLM_MOE_ROUTING_SIMULATION_STRATEGY": lambda: os.environ.get(
         "VLLM_MOE_ROUTING_SIMULATION_STRATEGY", ""
     ).lower(),

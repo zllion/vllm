@@ -49,7 +49,11 @@ class DistributionBasedRouting(RoutingStrategy):
     distributions for testing different routing patterns.
     """
 
-    def __init__(self, distribution: str = "uniform", **distribution_params: Any):
+    def __init__(
+        self,
+        distribution: str = "uniform",
+        **distribution_params: Any,
+    ):
         """
         Initialize distribution-based routing.
 
@@ -64,6 +68,7 @@ class DistributionBasedRouting(RoutingStrategy):
         """
         self.distribution = distribution.lower()
         self.distribution_params = distribution_params
+        self._log_marginal_cache: dict[tuple[int, torch.device], torch.Tensor] = {}
 
         # Validate distribution and parameters
         self._validate_distribution_params()
@@ -82,6 +87,14 @@ class DistributionBasedRouting(RoutingStrategy):
         if self.distribution == "normal":
             self.distribution_params.setdefault("mean", 0.0)
             self.distribution_params.setdefault("std", 1.0)
+
+    @staticmethod
+    def _validate_top_k(top_k: int, num_experts: int) -> None:
+        if top_k > num_experts:
+            raise ValueError(
+                f"top_k ({top_k}) cannot exceed num_experts ({num_experts}) "
+                f"when sampling distinct experts per token."
+            )
 
     def route_tokens(
         self,
@@ -130,6 +143,8 @@ class DistributionBasedRouting(RoutingStrategy):
     ) -> torch.Tensor:
         """Sample expert IDs based on the specified distribution."""
 
+        self._validate_top_k(top_k, num_experts)
+
         if self.distribution == "uniform":
             # Generate random scores, and take the top-k to avoid duplicate topk_ids
             scores = torch.rand(num_tokens, num_experts, device=device)
@@ -137,19 +152,14 @@ class DistributionBasedRouting(RoutingStrategy):
             return topk_ids.to(indices_type)
 
         elif self.distribution == "normal":
-            # For normal distribution, sample continuous values and map to
-            # expert IDs
-            continuous_samples = self._sample_continuous_distribution(
-                num_tokens, top_k, device
+            # Gumbel top-k samples a distinct set while preserving the
+            # binned normal distribution's per-expert probabilities.
+            log_probs = self._expert_log_marginal(num_experts, device)
+            scores = torch.empty(num_tokens, num_experts, device=device)
+            scores.exponential_().log_().sub_(log_probs)
+            return scores.topk(top_k, dim=-1, largest=False, sorted=False).indices.to(
+                dtype=indices_type
             )
-
-            # Map continuous samples to expert indices
-            # Normalize to [0, 1] range and scale to [0, num_experts)
-            normalized_samples = self._normalize_samples(continuous_samples)
-            expert_ids = (normalized_samples * num_experts).long()
-            expert_ids = torch.clamp(expert_ids, 0, num_experts - 1)
-
-            return expert_ids.to(dtype=indices_type)
 
         else:
             raise ValueError(f"Unsupported distribution: {self.distribution}")
@@ -170,16 +180,44 @@ class DistributionBasedRouting(RoutingStrategy):
                 f"Unsupported continuous distribution: {self.distribution}"
             )
 
-    def _normalize_samples(self, samples: torch.Tensor) -> torch.Tensor:
-        """Normalize samples to [0, 1] range."""
-        if self.distribution == "normal":
-            # Use sigmoid to map normal distribution to [0, 1]
-            return torch.sigmoid(samples)
+    def _expert_log_marginal(
+        self, num_experts: int, device: torch.device
+    ) -> torch.Tensor:
+        """Return the cached log probability of routing to each expert."""
+        key = (num_experts, device)
+        cached = self._log_marginal_cache.get(key)
+        if cached is None:
+            cached = self._compute_expert_log_marginal(num_experts, device)
+            self._log_marginal_cache[key] = cached
+        return cached
 
-        else:
-            raise ValueError(
-                f"Unsupported distribution for normalization: {self.distribution}"
-            )
+    def _compute_expert_log_marginal(
+        self, num_experts: int, device: torch.device
+    ) -> torch.Tensor:
+        """Compute log P(expert) for the binned logistic-normal distribution.
+
+        The calculation stays in log space and mirrors right-tail bins into the
+        left tail to avoid probability underflow.
+        """
+        mean = float(self.distribution_params["mean"])
+        std = float(self.distribution_params["std"])
+
+        edges = torch.special.logit(
+            torch.arange(num_experts + 1, dtype=torch.float64, device=device)
+            / num_experts
+        )
+        edges = (edges - mean) / std
+        lower, upper = edges[:-1], edges[1:]
+
+        mirror = lower > 0
+        low = torch.where(mirror, -upper, lower)
+        high = torch.where(mirror, -lower, upper)
+
+        log_high = torch.special.log_ndtr(high)
+        log_low = torch.special.log_ndtr(low)
+        log_probs = log_high + torch.log1p(-torch.exp(log_low - log_high))
+
+        return (log_probs - torch.logsumexp(log_probs, dim=0)).float()
 
     def _generate_weights(
         self, num_tokens: int, top_k: int, device: torch.device

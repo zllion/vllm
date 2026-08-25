@@ -220,7 +220,7 @@ For multi-node deployment, add these EPLB flags to each node's command. We recom
 
 ### Benchmarking
 
-- Use simulator flags `VLLM_MOE_ROUTING_SIMULATION_STRATEGY=uniform_random` and `VLLM_RANDOMIZE_DP_DUMMY_INPUTS=1` so token routing is balanced across EP ranks.
+- Use simulator flags `VLLM_MOE_ROUTING_SIMULATION_STRATEGY=uniform_random` and `VLLM_RANDOMIZE_DP_DUMMY_INPUTS=1` so token routing is balanced across EP ranks. Use `normal_routing` to simulate skewed routing. Both strategies sample distinct expert IDs per token, as required by `--all2all-backend deepep_v2`.
 
 ## Disaggregated Serving (Prefill/Decode Split)
 
